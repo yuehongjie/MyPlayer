@@ -6,7 +6,8 @@ import android.view.View;
 
 public class MainActivity extends AppCompatActivity implements View.OnClickListener{
 
-    private static final String VIDEO_URL = "http://gslb.miaopai.com/stream/JcgCcPco3LYy3z7eQKDei2izkff3R9DO-OPWNw__.mp4";
+    //private static final String VIDEO_URL = "http://gslb.miaopai.com/stream/JcgCcPco3LYy3z7eQKDei2izkff3R9DO-OPWNw__.mp4";
+    private static final String VIDEO_URL = "https://f.us.sinaimg.cn/0015B96Vlx07fB6EZV9K010401013MW70k01.mp4?label=mp4_hd&template=28&Expires=1510143898&ssig=inpMOoK7BB&KID=unistore,video";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {

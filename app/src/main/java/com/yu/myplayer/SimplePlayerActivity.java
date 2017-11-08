@@ -15,6 +15,7 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
@@ -49,6 +50,7 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
     private static final String TAG = "SimplePlayerActivity";
 
     // view
+    private FrameLayout flContainer; // view root
     private SurfaceView mSurfaceView; // 视频显示控件
     private LinearLayout mBottomControlerLayout; // 底部控制控件
     private ImageView mIvPlaySwitch; // 暂停和开始切换控件
@@ -72,8 +74,11 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
     private int mPausePosition; //从上次暂停的位置恢复播放
     private int mBufferPercent; //缓冲进度 1~100
     private boolean mDragingProgress; //正在拖拽进度条
+    private boolean mIsPaused;
+    private int mStartDragPosition; //需要跳转的位置
 
     private Handler mHandler = new Handler();
+    private MediaPlayerGestureController mMediaPlayerGestureController;//手势控制器
 
 
     public static void start(Context context, String url) {
@@ -101,6 +106,7 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
     }
 
     private void initView() {
+        flContainer = findView(R.id.fl_container);
         mSurfaceView = findView(R.id.surfaceView);
         mBottomControlerLayout = findView(R.id.ll_player_controller);
         mIvPlaySwitch = findView(R.id.iv_play);
@@ -117,7 +123,15 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
 
         mIvPlaySwitch.setOnClickListener(this);
         mIvScreenSwitch.setOnClickListener(this);
-        mProgressBar.setOnSeekBarChangeListener(this);
+        mProgressBar.setOnSeekBarChangeListener(this);;
+
+        //手势识别
+        mMediaPlayerGestureController = new MediaPlayerGestureController(this, flContainer);
+        //设置音量、亮度调节面板
+        mMediaPlayerGestureController.setAdjustPanelContainer(flContainer);
+        //设置进度调节面板
+        mMediaPlayerGestureController.setProgressAdjustPanelContainer(flContainer);
+
     }
 
     private <T extends View> T findView(int id) {
@@ -157,6 +171,7 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
             @Override
             public void surfaceDestroyed(SurfaceHolder surfaceHolder) { //当页面不可见 stop 的时候 会调用该方法，减少资源占用
                 Log.d(TAG, "surfaceDestroyed...");
+                mIsSurfaceCreated = false;
             }
         });
     }
@@ -200,15 +215,30 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
     public void onClick(View view) {
         switch (view.getId()) {
             case R.id.iv_play: // 暂停 开始 切换
+                if (isPlaying()) { // 播放 --> 暂停
+                    pause();
+                }else { //暂停到播放
+                    resume();
+                }
                 break;
             case R.id.iv_fullscreen_video: // 横竖屏切换
                 break;
         }
     }
 
+    //是否正在播放
+    private boolean isPlaying() {
+        return mMediaPlayer != null && mMediaPlayer.isPlaying();
+    }
+
+    private boolean isPaused() {
+        return mIsPaused;
+    }
+
     // SeekBar 进度条进度变化监听
     @Override
     public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+        //Log.d(TAG, "用户拖拽：" + fromUser);
         if (!fromUser) {
             return;
         }
@@ -223,6 +253,7 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
     }
     @Override
     public void onStopTrackingTouch(SeekBar seekBar) {
+        //Log.d(TAG, "停止拖拽");
         mDragingProgress = false;
         updateSeek(seekBar.getProgress(), true);
     }
@@ -249,7 +280,7 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
     private void updateProgress(){
         mHandler.postDelayed(mUpdateProgressRunnable, 1000); // 1s 更新一次进度
 
-        if (mDragingProgress || !mIsMediaPrepared || !mMediaPlayer.isPlaying()) { //没有在播放就不更新了
+        if (mMediaPlayer != null && mDragingProgress || !mIsMediaPrepared || !mMediaPlayer.isPlaying()) { //没有在播放就不更新了
             return;
         }
 
@@ -285,10 +316,35 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
     @Override
     protected void onPause() {
         super.onPause();
+        pause();
+    }
 
-        if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
+    private void pause(){
+        if (mMediaPlayer == null || !mIsMediaPrepared) {
+            return;
+        }
+
+        if (mMediaPlayer.isPlaying()) {
             mMediaPlayer.pause();
+            mIsPaused = true;
             mPausePosition = mMediaPlayer.getCurrentPosition();
+
+            mIvPlaySwitch.setImageResource(R.drawable.btn_play);
+        }
+    }
+
+    private void resume() {
+
+        Log.d(TAG, "isPlaying: " + isPlaying());
+
+        if (!isPlaying()) {
+            synchronized(mLock){ //同步一下，因为 mIsSurfaceCreated 和 mIsMediaPrepared 是在两个线程后进行初始化的
+                if (mMediaPlayer != null && mIsSurfaceCreated && mIsMediaPrepared) { // surface 已准备好 && MediaPlayer 已准备好 可以播放
+                    mMediaPlayer.start();
+                    mIsPaused = false;
+                    mIvPlaySwitch.setImageResource(R.drawable.btn_pause);
+                }
+            }
         }
     }
 
@@ -296,16 +352,21 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
     @Override
     protected void onDestroy() {
         super.onDestroy();
+
+        mHandler.removeCallbacks(mUpdateProgressRunnable); //取消自动更新进度条
+
         releaseMedia();
     }
 
     private void releaseMedia(){
+
         if (mMediaPlayer != null) {
             mMediaPlayer.stop();
             mMediaPlayer.setDisplay(null);
             mMediaPlayer.reset();
             mMediaPlayer.release();
             mMediaPlayer = null;
+            Log.d(TAG, "release media player ok");
         }
     }
 
@@ -317,19 +378,82 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
                 mMediaPlayer.setScreenOnWhilePlaying(true);
                 mMediaPlayer.start();
                 mMediaPlayer.seekTo(mPausePosition);
+
+                addGestureListener();// 开始播放添加手势监听
             }
         }
     }
 
+    // ------------------------------- 添加手势控制监听 --------------------------------------
 
-    // MediaPlayer Listener
+    private void addGestureListener() {
+        if (mMediaPlayerGestureController != null) {
+            mMediaPlayerGestureController.setGestureOperationListener(mGestureListener);
+        }
+    }
 
-    private MediaPlayer.OnErrorListener mOnErrorListener = new MediaPlayer.OnErrorListener() {
+    private MediaPlayerGestureController.GestureOperationListener mGestureListener = new MediaPlayerGestureController.GestureOperationListener() {
         @Override
-        public boolean onError(MediaPlayer mediaPlayer, int what, int extra) {
-            return false;
+        public void onSingleTap() { //单击
+            if (mBottomControlerLayout.getVisibility() == View.VISIBLE) {
+                mBottomControlerLayout.setVisibility(View.GONE);
+            }else {
+                mBottomControlerLayout.setVisibility(View.VISIBLE);
+            }
+        }
+
+        @Override
+        public void onDoubleTap() { //双击
+            if (isPlaying()) {
+                pause();
+            }else {
+                resume();
+            }
+        }
+
+        @Override
+        public void onStartDragProgress() {//开始拖拽
+            if (mMediaPlayer != null) {
+                mStartDragPosition = mMediaPlayer.getCurrentPosition();
+
+                mHandler.removeCallbacks(mUpdateProgressRunnable);
+            }
+
+        }
+
+        @Override
+        public void onDraggingProgress(float percent) {//拖拽中
+            if (mMediaPlayer != null) {
+                int duration = mMediaPlayer.getDuration();
+                int seekOffset = (int) (percent * duration);
+                int seekToPosition = mStartDragPosition + seekOffset;
+
+                if (seekToPosition < 0) {
+                    seekToPosition = 0;
+                }else if (seekToPosition > duration) {
+                    seekToPosition = duration;
+                }
+
+                mMediaPlayerGestureController.showAdjustProgress(percent > 0, seekToPosition, duration);
+
+                updateSeek(seekToPosition, false);
+                mProgressBar.setProgress(seekToPosition);
+            }
+
+        }
+
+        @Override
+        public void onEndDragProgress(float percent) { //结束拖拽
+            int duration = mMediaPlayer.getDuration();
+            int seekOffset = (int) (percent * duration);
+            int seekToPosition = mStartDragPosition + seekOffset;
+
+            updateSeek(seekToPosition, true);
         }
     };
+
+
+    //--------------------------------- MediaPlayer Listener -------------------------------------
 
     private MediaPlayer.OnPreparedListener mOnPreparedListener = new MediaPlayer.OnPreparedListener() {
         @Override
@@ -344,6 +468,11 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
         @Override
         public void onCompletion(MediaPlayer mediaPlayer) {
             Log.d(TAG, "media player onCompletion");
+            mHandler.removeCallbacks(mUpdateProgressRunnable); //取消自动更新进度条
+            mIvPlaySwitch.setImageResource(R.drawable.btn_play);
+            mMediaPlayer.seekTo(0);
+            mProgressBar.setProgress(0);
+            mTvCurrentTime.setText(MediaUtils.formatTime(0));
         }
     };
 
@@ -367,6 +496,47 @@ public class SimplePlayerActivity extends AppCompatActivity implements View.OnCl
         @Override
         public void onVideoSizeChanged(MediaPlayer mediaPlayer, int width, int height) {
             Log.d(TAG, "media player onVideoSizeChanged  ( width = " + width + " , height = " + height + " )" );
+        }
+    };
+
+    private MediaPlayer.OnErrorListener mOnErrorListener = new MediaPlayer.OnErrorListener() {
+        @Override
+        public boolean onError(MediaPlayer mediaPlayer, int what, int extra) {
+            String errorWhat;
+            switch (what) {
+                case MediaPlayer.MEDIA_ERROR_UNKNOWN:
+                    errorWhat = "MEDIA_ERROR_UNKNOWN";
+                    break;
+                case MediaPlayer.MEDIA_ERROR_SERVER_DIED:
+                    errorWhat = "MEDIA_ERROR_SERVER_DIED";
+                    break;
+                default:
+                    errorWhat = "!";
+            }
+
+            String errorExtra;
+            switch (extra) {
+                case MediaPlayer.MEDIA_ERROR_UNSUPPORTED:
+                    errorExtra = "MEDIA_ERROR_UNSUPPORTED";
+                    break;
+                case MediaPlayer.MEDIA_ERROR_MALFORMED:
+                    errorExtra = "MEDIA_ERROR_MALFORMED";
+                    break;
+                case MediaPlayer.MEDIA_ERROR_IO:
+                    errorExtra = "MEDIA_ERROR_IO";
+                    break;
+                case MediaPlayer.MEDIA_ERROR_TIMED_OUT:
+                    errorExtra = "MEDIA_ERROR_TIMED_OUT";
+                    break;
+                default:
+                    errorExtra = "!";
+            }
+
+            String msg = String.format("what = %d (%s), extra = %d (%s)",
+                    what, errorWhat, extra, errorExtra);
+
+            Log.e(TAG, msg);
+            return true;
         }
     };
 }
